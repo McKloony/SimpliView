@@ -1,0 +1,55 @@
+// SimpliView Windows Resources
+#pragma code_page(65001)
+#include <windows.h>
+#include <commctrl.h>
+
+// Application Icon
+1 ICON "../photo_portrait.ico"
+
+// Toolbar Bitmap (will be loaded programmatically from PNG)
+// ID 100 is reserved for toolbar image list
+
+// Application Manifest for DPI awareness and Common Controls v6
+1 RT_MANIFEST "simpliview.manifest"
+
+// Version Information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,1,2,0
+PRODUCTVERSION  1,1,2,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "SimpliView"
+            VALUE "FileDescription",  "SimpliView"
+            VALUE "FileVersion",      "1.1.2.0"
+            VALUE "InternalName",     "SimpliView"
+            VALUE "LegalCopyright",   "Copyright (C) 2026"
+            VALUE "OriginalFilename", "SimpliView.exe"
+            VALUE "ProductName",      "SimpliView"
+            VALUE "ProductVersion",   "1.1.2.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END
+
+// Kennwort-Dialog
+200 DIALOGEX 0, 0, 220, 75
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Kennwort erforderlich"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Dieses Dokument ist kennwortgeschützt.\nBitte geben Sie das Kennwort ein:", -1, 10, 10, 200, 18
+    EDITTEXT        201, 10, 32, 200, 14, ES_PASSWORD | ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK", IDOK, 100, 54, 50, 14
+    PUSHBUTTON      "Abbrechen", IDCANCEL, 155, 54, 55, 14
+END
