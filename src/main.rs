@@ -86,10 +86,32 @@ fn main() -> Result<()> {
                  i += 1;
              }
         } else if !arg.starts_with("--") {
-            // Assume it's a file path
-            file_to_open = Some(arg.clone());
+            if file_to_open.is_none() {
+                file_to_open = Some(arg.clone());
+            } else if restricted_path.is_none() {
+                restricted_path = Some(arg.clone());
+            }
         }
         i += 1;
+    }
+
+    // Validate restricted path if provided
+    if let Some(ref path) = restricted_path {
+        // Check for common CLI quoting errors (quote inside string)
+        if path.contains('\"') {
+            show_message("Fehler beim Starten", "Der angegebene Pfad enthält ungültige Zeichen (Anführungszeichen).\nMöglicherweise wurde ein abschließender Backslash vor dem Anführungszeichen verwendet (z.B. \"C:\\Pfad\\\").\nBitte verwenden Sie \"C:\\Pfad\" oder \"C:\\Pfad\\\\\".");
+            return Ok(());
+        }
+
+        let p = std::path::Path::new(path);
+        if !p.exists() {
+            show_message("Fehler beim Starten", &format!("Der eingeschränkte Speicherpfad existiert nicht:\n{}", path));
+            return Ok(());
+        }
+        if !p.is_dir() {
+            show_message("Fehler beim Starten", &format!("Der eingeschränkte Speicherpfad ist kein Verzeichnis:\n{}", path));
+            return Ok(());
+        }
     }
 
     // Create and run the application

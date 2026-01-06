@@ -208,6 +208,7 @@ impl App {
 
         // Disable document-dependent buttons until a document is loaded
         self.top_toolbar.set_document_loaded(false);
+        self.top_toolbar.set_navigation_enabled(false);
         self.statusbar.set_document_loaded(false);
         self.context_menu.set_document_loaded(false);
 
@@ -1634,13 +1635,6 @@ impl App {
     fn open_document_internal(&mut self, path: &str, keep_folder_mode: bool, skip_folder_scan: bool) {
         let _wait_cursor = WaitCursorGuard::new();
 
-        if let Some(ref restricted) = self.dialogs.restricted_path {
-             if !path.starts_with(restricted) {
-                  self.show_error("Zugriff verweigert: Datei befindet sich außerhalb des erlaubten Ordners.");
-                  return;
-             }
-        }
-
         // Show filename in statusbar immediately before loading
         let filename = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Datei");
         self.statusbar.set_loading_file(filename);
@@ -1701,6 +1695,7 @@ impl App {
 
                 self.statusbar.set_file_info(filename, &dim_str, file_size, 0, total_pages);
                 self.top_toolbar.set_document_loaded(true);
+                self.top_toolbar.set_navigation_enabled(total_pages > 1);
                 self.statusbar.set_document_loaded(true);
                 self.context_menu.set_document_loaded(true);
 

@@ -76,11 +76,6 @@ impl FileDialogs {
             let options = dialog.GetOptions().ok()?;
             dialog.SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST).ok()?;
 
-            // Apply restricted path if specified
-            if let Some(ref path) = self.restricted_path {
-                self.apply_folder_restriction(&dialog, path);
-            }
-
             // Show dialog
             if dialog.Show(parent).is_err() {
                 return None;
@@ -97,47 +92,83 @@ impl FileDialogs {
     }
 
     pub fn save_file(&self, parent: HWND, default_filename: Option<&str>, original_extension: Option<&str>) -> Option<String> {
-        unsafe {
-            // Create file save dialog
-            let dialog: IFileSaveDialog =
-                CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        loop {
+            unsafe {
+                // Create file save dialog
+                let dialog: IFileSaveDialog = match CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER) {
+                    Ok(d) => d,
+                    Err(_) => return None,
+                };
 
-            // Get default filter index and extension based on original file extension
-            let ext = original_extension.unwrap_or("png");
-            let (index, default_ext) = get_save_type_index(ext);
+                // Get default filter index and extension based on original file extension
+                let ext = original_extension.unwrap_or("png");
+                let (index, default_ext) = get_save_type_index(ext);
 
-            // Set file types - allow all supported save formats
-            dialog.SetFileTypes(SAVE_TYPES).ok()?;
-            dialog.SetFileTypeIndex(index).ok()?;
-            dialog.SetDefaultExtension(default_ext).ok()?;
+                // Set file types - allow all supported save formats
+                if dialog.SetFileTypes(SAVE_TYPES).is_err() { return None; }
+                if dialog.SetFileTypeIndex(index).is_err() { return None; }
+                if dialog.SetDefaultExtension(default_ext).is_err() { return None; }
 
-            // Set default filename if provided
-            if let Some(filename) = default_filename {
-                let name_wide: Vec<u16> = filename.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = dialog.SetFileName(PCWSTR(name_wide.as_ptr()));
+                // Set default filename if provided
+                if let Some(filename) = default_filename {
+                    let name_wide: Vec<u16> = filename.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = dialog.SetFileName(PCWSTR(name_wide.as_ptr()));
+                }
+
+                // Set options
+                if let Ok(options) = dialog.GetOptions() {
+                    let _ = dialog.SetOptions(options | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT);
+                }
+
+                // Apply restricted path if specified
+                if let Some(ref path) = self.restricted_path {
+                    self.apply_folder_restriction_save(&dialog, path);
+                }
+
+                // Show dialog
+                if dialog.Show(parent).is_err() {
+                    return None;
+                }
+
+                // Get result
+                let result = match dialog.GetResult() {
+                    Ok(r) => r,
+                    Err(_) => return None,
+                };
+                
+                let path_item = match result.GetDisplayName(SIGDN_FILESYSPATH) {
+                    Ok(p) => p,
+                    Err(_) => return None,
+                };
+                
+                let path_str = match path_item.to_string() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        CoTaskMemFree(Some(path_item.0 as *const _));
+                        return None;
+                    }
+                };
+                CoTaskMemFree(Some(path_item.0 as *const _));
+
+                // Validate restriction
+                if let Some(ref restricted) = self.restricted_path {
+                    // Normalize paths for comparison (lowercase, handle separators)
+                    let p_lower = path_str.to_lowercase();
+                    let r_lower = restricted.to_lowercase();
+                    
+                    // Simple check: does the selected path start with the restricted path?
+                    // We also ensure the restricted path ends with a separator for correct prefix matching
+                    // unless it's just a drive root like "C:\"
+                    let r_clean = r_lower.trim_end_matches('\\');
+                    
+                    if !p_lower.starts_with(r_clean) {
+                        show_error(parent, &format!("Speichern ist nur im Ordner '{}' erlaubt.", restricted));
+                        continue; // Re-open dialog
+                    }
+                }
+
+                return Some(path_str);
             }
-
-            // Set options
-            let options = dialog.GetOptions().ok()?;
-            dialog.SetOptions(options | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT).ok()?;
-
-            // Apply restricted path if specified
-            if let Some(ref path) = self.restricted_path {
-                self.apply_folder_restriction_save(&dialog, path);
-            }
-
-            // Show dialog
-            if dialog.Show(parent).is_err() {
-                return None;
-            }
-
-            // Get result
-            let result = dialog.GetResult().ok()?;
-            let path = result.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
-            let path_str = path.to_string().ok()?;
-            CoTaskMemFree(Some(path.0 as *const _));
-
-            Some(path_str)
         }
     }
 

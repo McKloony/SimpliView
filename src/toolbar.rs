@@ -423,9 +423,15 @@ impl Toolbar {
             SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_EXPORT as usize), LPARAM(enable));
             SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_ROTATE_LEFT as usize), LPARAM(enable));
             SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_ROTATE_RIGHT as usize), LPARAM(enable));
+            SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_PRINT as usize), LPARAM(enable));
+        }
+    }
+
+    pub fn set_navigation_enabled(&self, enabled: bool) {
+        unsafe {
+            let enable = if enabled { 1isize } else { 0isize };
             SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_PREV_PAGE as usize), LPARAM(enable));
             SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_NEXT_PAGE as usize), LPARAM(enable));
-            SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_PRINT as usize), LPARAM(enable));
         }
     }
 
