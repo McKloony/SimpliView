@@ -34,6 +34,17 @@ pub const WM_APP_DOCUMENT_LOADED: u32 = WM_APP + 1;
 #[allow(dead_code)]
 pub const WM_APP_DOCUMENT_ERROR: u32 = WM_APP + 2;
 
+/// Navigation context determines how Back/Next buttons behave
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NavigationContext {
+    /// No document loaded, or navigation disabled (cmd-line single-page)
+    Disabled,
+    /// Navigate between files in the folder (lazy enumeration)
+    FolderBrowsing,
+    /// Navigate between pages within a multi-page document
+    DocumentPaging,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub document: Option<Document>,
@@ -49,6 +60,8 @@ pub struct AppState {
     pub folder_files: Vec<String>,
     pub folder_file_index: usize,
     pub folder_navigation_mode: bool, // true = navigate files, false = navigate pages
+    pub folder_cache_valid: bool,     // true if folder_files is populated and current
+    pub navigation_context: NavigationContext, // Current navigation mode
     // Scroll state
     pub scroll_x: i32,        // Horizontal scroll offset (in scaled pixels)
     pub scroll_y: i32,        // Vertical scroll offset (in scaled pixels)
@@ -73,6 +86,8 @@ impl Default for AppState {
             folder_files: Vec::new(),
             folder_file_index: 0,
             folder_navigation_mode: true,
+            folder_cache_valid: false,
+            navigation_context: NavigationContext::Disabled,
             scroll_x: 0,
             scroll_y: 0,
             content_width: 0,
@@ -787,6 +802,8 @@ impl App {
 
             // Update status bar with current page
             self.update_page_display(most_visible, total, path.as_deref());
+            // Update navigation buttons for new page position
+            self.update_navigation_buttons();
         }
     }
 
@@ -1151,66 +1168,152 @@ impl App {
         self.invalidate();
     }
 
+    /// Ensure folder cache is populated (lazy enumeration)
+    fn ensure_folder_cache(&mut self) {
+        let state = self.state.lock();
+        let cache_valid = state.folder_cache_valid;
+        let file_path = state.file_path.clone();
+        drop(state);
+
+        if cache_valid {
+            return; // Cache already valid
+        }
+
+        // Perform lazy folder scan
+        if let Some(path) = file_path {
+            let (files, idx) = Self::scan_folder_files(&path);
+            let mut state = self.state.lock();
+            state.folder_files = files;
+            state.folder_file_index = idx;
+            state.folder_cache_valid = true;
+            drop(state);
+            // Update button states now that we know the actual folder size
+            self.update_navigation_buttons();
+        }
+    }
+
+    /// Update Back/Next button states based on current navigation context and position.
+    /// Single source of truth for navigation button enable/disable logic.
+    fn update_navigation_buttons(&mut self) {
+        let state = self.state.lock();
+        let nav_context = state.navigation_context;
+
+        let (back_enabled, next_enabled) = match nav_context {
+            NavigationContext::Disabled => (false, false),
+            NavigationContext::FolderBrowsing => {
+                if !state.folder_cache_valid {
+                    // Lazy enumeration not done yet - enable both to allow triggering it
+                    (true, true)
+                } else {
+                    let count = state.folder_files.len();
+                    let idx = state.folder_file_index;
+                    // At first file: Back disabled. At last file: Next disabled.
+                    (idx > 0, count > 1 && idx < count - 1)
+                }
+            }
+            NavigationContext::DocumentPaging => {
+                let page = state.current_page;
+                let total = state.total_pages;
+                // At first page: Back disabled. At last page: Next disabled.
+                (page > 0, total > 1 && page < total - 1)
+            }
+        };
+        drop(state);
+
+        self.top_toolbar.set_navigation_buttons(back_enabled, next_enabled);
+    }
+
     fn cmd_prev_page(&mut self) {
         let state = self.state.lock();
+        let nav_context = state.navigation_context;
         let current_page = state.current_page;
-        let _total_pages = state.total_pages;
-        let folder_files = state.folder_files.clone();
-        let folder_index = state.folder_file_index;
-        let folder_mode = state.folder_navigation_mode;
         let is_multipage = state.multi_page_view && state.total_pages > 1;
         drop(state);
 
-        if folder_mode {
-            if folder_files.len() > 1 && folder_index > 0 {
-                let prev_file = folder_files[folder_index - 1].clone();
-                self.open_document_with_mode(&prev_file, true);
+        match nav_context {
+            NavigationContext::Disabled => {
+                // Navigation disabled, do nothing
             }
-        } else if current_page > 0 {
-            if is_multipage {
-                // In multi-page mode, scroll to previous page
-                self.scroll_to_page(current_page - 1);
-            } else {
-                // Single page mode - switch page
-                {
-                    let mut state = self.state.lock();
-                    state.current_page -= 1;
-                    state.scroll_x = 0;
-                    state.scroll_y = 0;
+            NavigationContext::FolderBrowsing => {
+                // Ensure folder cache is populated (lazy enumeration)
+                self.ensure_folder_cache();
+
+                let state = self.state.lock();
+                let folder_files = state.folder_files.clone();
+                let folder_index = state.folder_file_index;
+                drop(state);
+
+                if folder_files.len() > 1 && folder_index > 0 {
+                    let prev_file = folder_files[folder_index - 1].clone();
+                    self.open_document_with_mode(&prev_file, true);
+                    // Note: open_document_with_mode calls update_navigation_buttons
                 }
-                self.update_page_display_and_repaint();
+            }
+            NavigationContext::DocumentPaging => {
+                if current_page > 0 {
+                    if is_multipage {
+                        // In multi-page mode, scroll to previous page
+                        self.scroll_to_page(current_page - 1);
+                    } else {
+                        // Single page mode - switch page
+                        {
+                            let mut state = self.state.lock();
+                            state.current_page -= 1;
+                            state.scroll_x = 0;
+                            state.scroll_y = 0;
+                        }
+                        self.update_page_display_and_repaint();
+                        self.update_navigation_buttons();
+                    }
+                }
             }
         }
     }
 
     fn cmd_next_page(&mut self) {
         let state = self.state.lock();
+        let nav_context = state.navigation_context;
         let current_page = state.current_page;
         let total_pages = state.total_pages;
-        let folder_files = state.folder_files.clone();
-        let folder_index = state.folder_file_index;
-        let folder_mode = state.folder_navigation_mode;
         let is_multipage = state.multi_page_view && state.total_pages > 1;
         drop(state);
 
-        if folder_mode {
-            if folder_files.len() > 1 && folder_index < folder_files.len() - 1 {
-                let next_file = folder_files[folder_index + 1].clone();
-                self.open_document_with_mode(&next_file, true);
+        match nav_context {
+            NavigationContext::Disabled => {
+                // Navigation disabled, do nothing
             }
-        } else if current_page < total_pages - 1 {
-            if is_multipage {
-                // In multi-page mode, scroll to next page
-                self.scroll_to_page(current_page + 1);
-            } else {
-                // Single page mode - switch page
-                {
-                    let mut state = self.state.lock();
-                    state.current_page += 1;
-                    state.scroll_x = 0;
-                    state.scroll_y = 0;
+            NavigationContext::FolderBrowsing => {
+                // Ensure folder cache is populated (lazy enumeration)
+                self.ensure_folder_cache();
+
+                let state = self.state.lock();
+                let folder_files = state.folder_files.clone();
+                let folder_index = state.folder_file_index;
+                drop(state);
+
+                if folder_files.len() > 1 && folder_index < folder_files.len() - 1 {
+                    let next_file = folder_files[folder_index + 1].clone();
+                    self.open_document_with_mode(&next_file, true);
+                    // Note: open_document_with_mode calls update_navigation_buttons
                 }
-                self.update_page_display_and_repaint();
+            }
+            NavigationContext::DocumentPaging => {
+                if current_page < total_pages - 1 {
+                    if is_multipage {
+                        // In multi-page mode, scroll to next page
+                        self.scroll_to_page(current_page + 1);
+                    } else {
+                        // Single page mode - switch page
+                        {
+                            let mut state = self.state.lock();
+                            state.current_page += 1;
+                            state.scroll_x = 0;
+                            state.scroll_y = 0;
+                        }
+                        self.update_page_display_and_repaint();
+                        self.update_navigation_buttons();
+                    }
+                }
             }
         }
     }
@@ -1225,6 +1328,7 @@ impl App {
 
         if is_multipage {
             self.scroll_to_page(0);
+            // Note: scroll_to_page calls update_navigation_buttons
         } else {
             {
                 let mut state = self.state.lock();
@@ -1233,6 +1337,7 @@ impl App {
                 state.scroll_y = 0;
             }
             self.update_page_display_and_repaint();
+            self.update_navigation_buttons();
         }
     }
 
@@ -1247,6 +1352,7 @@ impl App {
 
         if is_multipage {
             self.scroll_to_page(last);
+            // Note: scroll_to_page calls update_navigation_buttons
         } else {
             {
                 let mut state = self.state.lock();
@@ -1255,6 +1361,7 @@ impl App {
                 state.scroll_y = 0;
             }
             self.update_page_display_and_repaint();
+            self.update_navigation_buttons();
         }
     }
 
@@ -1281,6 +1388,7 @@ impl App {
 
                 self.scroll_manager.set_pos(SB_VERT, new_y);
                 self.update_page_display(page, total, path.as_deref());
+                self.update_navigation_buttons();
                 self.invalidate();
 
                 return;
@@ -1291,6 +1399,7 @@ impl App {
         state.current_page = page;
         drop(state);
         self.update_page_display_and_repaint();
+        self.update_navigation_buttons();
     }
 
     fn update_page_display_and_repaint(&mut self) {
@@ -1586,6 +1695,51 @@ impl App {
         }
     }
 
+    /// Natural sort key for filenames: splits into text and numeric segments
+    /// Example: "file2.txt" < "file10.txt" (unlike lexicographic sort)
+    fn natural_sort_key(path: &str) -> Vec<(String, u64)> {
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_lowercase();
+
+        let mut result = Vec::new();
+        let mut current_text = String::new();
+        let mut current_num = String::new();
+        let mut in_number = false;
+
+        for ch in filename.chars() {
+            if ch.is_ascii_digit() {
+                if !in_number && !current_text.is_empty() {
+                    result.push((current_text.clone(), 0));
+                    current_text.clear();
+                }
+                in_number = true;
+                current_num.push(ch);
+            } else {
+                if in_number && !current_num.is_empty() {
+                    let num = current_num.parse::<u64>().unwrap_or(0);
+                    result.push((String::new(), num));
+                    current_num.clear();
+                }
+                in_number = false;
+                current_text.push(ch);
+            }
+        }
+
+        // Push remaining
+        if !current_text.is_empty() {
+            result.push((current_text, 0));
+        }
+        if !current_num.is_empty() {
+            let num = current_num.parse::<u64>().unwrap_or(0);
+            result.push((String::new(), num));
+        }
+
+        result
+    }
+
     fn scan_folder_files(path: &str) -> (Vec<String>, usize) {
         let path_obj = std::path::Path::new(path);
         let folder = match path_obj.parent() { Some(f) => f, None => return (vec![path.to_string()], 0) };
@@ -1617,14 +1771,22 @@ impl App {
             let _ = FindClose(handle);
         }
 
-        files.sort_by_key(|a| a.to_lowercase());
+        // Use natural sort (file2 before file10)
+        files.sort_by(|a, b| Self::natural_sort_key(a).cmp(&Self::natural_sort_key(b)));
         let current_index = files.iter().position(|f| f.eq_ignore_ascii_case(path)).unwrap_or(0);
         (files, current_index)
     }
 
     fn open_document(&mut self, path: &str) {
         let skip_scan = self.opened_from_cmdline;
-        self.open_document_internal(path, false, skip_scan);
+        // If already in folder navigation mode, preserve it even when using Open dialog
+        let keep_folder_mode = if !skip_scan {
+            let state = self.state.lock();
+            state.navigation_context == NavigationContext::FolderBrowsing
+        } else {
+            false
+        };
+        self.open_document_internal(path, keep_folder_mode, skip_scan);
         self.opened_from_cmdline = false;
     }
 
@@ -1655,17 +1817,61 @@ impl App {
                 let total_pages = doc.page_count();
                 let (width, height) = doc.dimensions();
                 let file_size = Self::get_file_size(path);
-                
-                let (folder_files, folder_index) = if skip_folder_scan {
-                    (vec![path.to_string()], 0)
+                let is_multipage = total_pages > 1;
+
+                // Determine navigation context and whether to scan folder
+                // Lazy folder enumeration: only scan when Back/Next is clicked
+                let (nav_context, folder_files, folder_index, folder_cache_valid) = if skip_folder_scan {
+                    // Opened from command line
+                    if is_multipage {
+                        // Multi-page doc from cmdline: page navigation enabled
+                        (NavigationContext::DocumentPaging, vec![path.to_string()], 0, false)
+                    } else {
+                        // Single-page doc from cmdline: navigation disabled
+                        (NavigationContext::Disabled, vec![path.to_string()], 0, false)
+                    }
+                } else if keep_folder_mode {
+                    // Already in folder mode, navigating to another file
+                    // Keep the existing folder cache if in same folder
+                    let state = self.state.lock();
+                    let files = state.folder_files.clone();
+                    let cache_valid = state.folder_cache_valid;
+                    let old_file_path = state.file_path.clone();
+                    drop(state);
+
+                    // Check if new file is in same folder as cached files
+                    let new_folder = std::path::Path::new(path).parent();
+                    let old_folder = old_file_path
+                        .as_ref()
+                        .and_then(|p| std::path::Path::new(p).parent());
+                    let same_folder = match (new_folder, old_folder) {
+                        (Some(nf), Some(of)) => nf == of,
+                        _ => false,
+                    };
+
+                    if same_folder && cache_valid {
+                        // Same folder, keep cache
+                        let idx = files.iter().position(|f| f.eq_ignore_ascii_case(path)).unwrap_or(0);
+                        (NavigationContext::FolderBrowsing, files, idx, cache_valid)
+                    } else {
+                        // Different folder or cache invalid, invalidate cache
+                        (NavigationContext::FolderBrowsing, vec![path.to_string()], 0, false)
+                    }
                 } else {
-                    Self::scan_folder_files(path)
+                    // Opened via Open dialog (not from cmdline)
+                    if is_multipage {
+                        // Multi-page doc: page navigation (not folder)
+                        (NavigationContext::DocumentPaging, vec![path.to_string()], 0, false)
+                    } else {
+                        // Single-page doc: folder navigation (lazy enumeration)
+                        // Don't scan folder yet, will scan on first Back/Next click
+                        (NavigationContext::FolderBrowsing, vec![path.to_string()], 0, false)
+                    }
                 };
 
-                let nav_mode = if keep_folder_mode { true } else if skip_folder_scan { false } else { total_pages == 1 };
+                let nav_mode = nav_context == NavigationContext::FolderBrowsing;
 
                 // Multi-page documents use 100% zoom, single-page uses fit-to-page
-                let is_multipage = total_pages > 1;
                 let initial_zoom = 1.0; // Will be recalculated for single-page
 
                 {
@@ -1680,6 +1886,8 @@ impl App {
                     state.folder_files = folder_files;
                     state.folder_file_index = folder_index;
                     state.folder_navigation_mode = nav_mode;
+                    state.folder_cache_valid = folder_cache_valid;
+                    state.navigation_context = nav_context;
                     state.scroll_x = 0;
                     state.scroll_y = 0;
                 }
@@ -1695,7 +1903,8 @@ impl App {
 
                 self.statusbar.set_file_info(filename, &dim_str, file_size, 0, total_pages);
                 self.top_toolbar.set_document_loaded(true);
-                self.top_toolbar.set_navigation_enabled(total_pages > 1);
+                // Update navigation buttons based on context and position
+                self.update_navigation_buttons();
                 self.statusbar.set_document_loaded(true);
                 self.context_menu.set_document_loaded(true);
 

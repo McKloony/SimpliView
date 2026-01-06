@@ -58,7 +58,15 @@ impl WicLoader {
                 WICDecodeMetadataCacheOnDemand,
             )?;
 
-            // Get frame
+            // Get frame count for multi-page support (TIFF)
+            let frame_count = decoder.GetFrameCount()?;
+
+            if frame_count > 1 {
+                // Multi-frame image (e.g., multi-page TIFF)
+                return self.load_multiframe(&factory, &decoder, frame_count);
+            }
+
+            // Single frame image
             let frame = decoder.GetFrame(0)?;
 
             // Get dimensions
@@ -82,6 +90,52 @@ impl WicLoader {
 
             Ok(Document::new_image(wic_bitmap, width, height))
         }
+    }
+
+    /// Load multi-frame images (e.g., multi-page TIFF)
+    fn load_multiframe(
+        &self,
+        factory: &IWICImagingFactory,
+        decoder: &IWICBitmapDecoder,
+        frame_count: u32,
+    ) -> Result<Document> {
+        use crate::document::PageData;
+
+        let mut pages = Vec::with_capacity(frame_count as usize);
+
+        unsafe {
+            for i in 0..frame_count {
+                let frame = decoder.GetFrame(i)?;
+
+                let mut width = 0u32;
+                let mut height = 0u32;
+                frame.GetSize(&mut width, &mut height)?;
+
+                // Convert to BGRA format
+                let converter = factory.CreateFormatConverter()?;
+                converter.Initialize(
+                    &frame,
+                    &GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapDitherTypeNone,
+                    None,
+                    0.0,
+                    WICBitmapPaletteTypeMedianCut,
+                )?;
+
+                // Create WIC bitmap for this frame
+                let wic_bitmap = factory.CreateBitmapFromSource(&converter, WICBitmapCacheOnLoad)?;
+
+                pages.push(PageData {
+                    width: width as f32,
+                    height: height as f32,
+                    wic_bitmap: Some(wic_bitmap),
+                    pixel_data: None,
+                    stride: 0,
+                });
+            }
+        }
+
+        Ok(Document::new_multiframe_image(pages))
     }
 
     pub fn save(&self, doc: &Document, path: &str, page: usize) -> Result<()> {

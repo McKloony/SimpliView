@@ -70,6 +70,15 @@ impl Document {
         }
     }
 
+    /// Create a multi-frame image document (e.g., multi-page TIFF)
+    pub fn new_multiframe_image(pages: Vec<PageData>) -> Self {
+        Self {
+            doc_type: DocumentType::Image,
+            pages,
+            bitmap_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
     pub fn doc_type(&self) -> DocumentType {
         self.doc_type
     }

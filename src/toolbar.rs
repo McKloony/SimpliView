@@ -435,6 +435,16 @@ impl Toolbar {
         }
     }
 
+    /// Set Back/Next buttons individually based on current position
+    pub fn set_navigation_buttons(&self, back_enabled: bool, next_enabled: bool) {
+        unsafe {
+            let back = if back_enabled { 1isize } else { 0isize };
+            let next = if next_enabled { 1isize } else { 0isize };
+            SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_PREV_PAGE as usize), LPARAM(back));
+            SendMessageW(self.toolbar_hwnd, TB_ENABLEBUTTON, WPARAM(ID_NEXT_PAGE as usize), LPARAM(next));
+        }
+    }
+
     pub fn set_open_enabled(&self, enabled: bool) {
         unsafe {
             let enable = if enabled { 1isize } else { 0isize };
